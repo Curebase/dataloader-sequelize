@@ -1,28 +1,37 @@
-import Sequelize from 'sequelize';
+var _sequelize = require('sequelize');
 
-export const MODEL = 'MODEL';
-export const ASSOCIATION = 'ASSOCIATION';
-export const SEQUELIZE = 'SEQUELIZE';
+const MODEL = 'MODEL';
+const ASSOCIATION = 'ASSOCIATION';
+const SEQUELIZE = 'SEQUELIZE';
 
-export function methods(version) {
+function methods(version) {
   return {
     findByPk: ['findByPk']
   };
 }
 
-export function method(target, alias) {
+function method(target, alias) {
   if (type(target) === MODEL) {
     return methods(target.sequelize.constructor.version)[alias][0];
   }
   throw new Error('Unknown target');
 }
 
-export function type(target) {
+function type(target) {
   if (target.associationType) {
     return ASSOCIATION;
-  } else if (/(SequelizeModel|class extends Model)/.test(target.toString()) || Sequelize.Model.isPrototypeOf(target)) {
+  } else if (/(SequelizeModel|class extends Model)/.test(target.toString()) || _sequelize.Model.isPrototypeOf(target)) {
     return MODEL;
   } else {
     return SEQUELIZE;
   }
+}
+
+module.exports = {
+  methods: methods,
+  method: method,
+  type: type,
+  MODEL: MODEL,
+  ASSOCIATION: ASSOCIATION,
+  SEQUELIZE: SEQUELIZE,
 }

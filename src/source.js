@@ -1,45 +1,10 @@
-'use strict';
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.EXPECTED_OPTIONS_KEY = undefined;
-
-var _extends = Object.assign || function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; };
-
-var _slicedToArray = function () { function sliceIterator(arr, i) { var _arr = []; var _n = true; var _d = false; var _e = undefined; try { for (var _i = arr[Symbol.iterator](), _s; !(_n = (_s = _i.next()).done); _n = true) { _arr.push(_s.value); if (i && _arr.length === i) break; } } catch (err) { _d = true; _e = err; } finally { try { if (!_n && _i["return"]) _i["return"](); } finally { if (_d) throw _e; } } return _arr; } return function (arr, i) { if (Array.isArray(arr)) { return arr; } else if (Symbol.iterator in Object(arr)) { return sliceIterator(arr, i); } else { throw new TypeError("Invalid attempt to destructure non-iterable instance"); } }; }();
-
-exports.getCacheKey = getCacheKey;
-exports.createContext = createContext;
-exports.removeContext = removeContext;
-
-var _sequelize = require('sequelize');
-
-var _sequelize2 = _interopRequireDefault(_sequelize);
-
-var _shimmer = require('shimmer');
-
-var _shimmer2 = _interopRequireDefault(_shimmer);
-
-var _dataloader = require('dataloader');
-
-var _dataloader2 = _interopRequireDefault(_dataloader);
-
-var _lodash = require('lodash');
-
-var _lruCache = require('lru-cache');
-
-var _lruCache2 = _interopRequireDefault(_lruCache);
-
-var _assert = require('assert');
-
-var _assert2 = _interopRequireDefault(_assert);
-
-var _helper = require('./helper');
-
-function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
-
-function _toConsumableArray(arr) { if (Array.isArray(arr)) { for (var i = 0, arr2 = Array(arr.length); i < arr.length; i++) arr2[i] = arr[i]; return arr2; } else { return Array.from(arr); } }
+import Sequelize from 'sequelize';
+import shimmer from 'shimmer';
+import DataLoader from 'dataloader';
+import {groupBy, property, values, clone, isEmpty, uniq} from 'lodash';
+import LRU from 'lru-cache';
+import assert from 'assert';
+import {methods} from './helper';
 
 const versionTestRegEx = /^[456]/;
 
@@ -47,12 +12,7 @@ function mapResult(attribute, keys, options, result) {
   // Convert an array of results to an object of attribute (primary / foreign / target key) -> array of matching rows
   if (Array.isArray(attribute) && options && options.multiple && !options.raw) {
     // Regular belongs to many
-    var _attribute = attribute,
-        _attribute2 = _slicedToArray(_attribute, 2);
-
-    let throughAttribute = _attribute2[0],
-        foreignKey = _attribute2[1];
-
+    let [throughAttribute, foreignKey] = attribute;
     result = result.reduce((carry, row) => {
       for (const throughRow of row.get(throughAttribute)) {
         let key = throughRow[foreignKey];
@@ -70,7 +30,7 @@ function mapResult(attribute, keys, options, result) {
       // Belongs to many count is a raw query, so we have to get the attribute directly
       attribute = attribute.join('.');
     }
-    result = (0, _lodash.groupBy)(result, (0, _lodash.property)(attribute));
+    result = groupBy(result, property(attribute));
   }
 
   return keys.map(key => {
@@ -90,7 +50,7 @@ function stringifyValue(value, key) {
     // the list of attributes' order doesn't matter,
     // but we assumer that order does matter for any other array-like option
     if (key === 'attributes') {
-      value = (0, _lodash.clone)(value).sort();
+      value = clone(value).sort();
     }
     return value.map(stringifyValue).join(',');
   } else if (typeof value === 'object' && value !== null) {
@@ -105,9 +65,7 @@ function stringifyValue(value, key) {
 // This is basically a home-grown JSON.stringifier. However, JSON.stringify on objects
 // depends on the order in which the properties were defined - which we don't like!
 // Additionally, JSON.stringify escapes strings, which we don't need here
-function stringifyObject(object) {
-  let keys = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : [].concat(_toConsumableArray(Object.keys(object)), _toConsumableArray(Object.getOwnPropertySymbols(object)));
-
+function stringifyObject(object, keys = [...Object.keys(object), ...Object.getOwnPropertySymbols(object)]) {
   return keys.sort((lhs, rhs) => {
     const l = lhs.toString();
     const r = rhs.toString();
@@ -131,37 +89,35 @@ function getCacheKey(model, attribute, options) {
 function mergeWhere(where, optionsWhere) {
   if (optionsWhere) {
     return {
-      [_sequelize2.default.Op ? _sequelize2.default.Op.and : '$and']: [where, optionsWhere]
+      [Sequelize.Op ? Sequelize.Op.and : '$and']: [where, optionsWhere]
     };
   }
   return where;
 }
 
 function rejectOnEmpty(options, result) {
-  if ((0, _lodash.isEmpty)(result) && options.rejectOnEmpty) {
+  if (isEmpty(result) && options.rejectOnEmpty) {
     if (typeof options.rejectOnEmpty === 'function') {
       throw new options.rejectOnEmpty();
     } else if (typeof options.rejectOnEmpty === 'object') {
       throw options.rejectOnEmpty;
     } else {
-      throw new _sequelize2.default.EmptyResultError();
+      throw new Sequelize.EmptyResultError();
     }
   }
 
   return result;
 }
 
-function loaderForBTM(model, joinTableName, foreignKey, foreignKeyField) {
-  let options = arguments.length > 4 && arguments[4] !== undefined ? arguments[4] : {};
-
-  (0, _assert2.default)(options.include === undefined, 'options.include is not supported by model loader');
-  (0, _assert2.default)(options.association !== undefined, 'options.association should be set for BTM loader');
+function loaderForBTM(model, joinTableName, foreignKey, foreignKeyField, options = {}) {
+  assert(options.include === undefined, 'options.include is not supported by model loader');
+  assert(options.association !== undefined, 'options.association should be set for BTM loader');
 
   let attributes = [joinTableName, foreignKey];
   const association = options.association;
   delete options.association;
 
-  return new _dataloader2.default(keys => {
+  return new DataLoader(keys => {
     let findOptions = Object.assign({}, options);
     delete findOptions.rejectOnEmpty;
     if (findOptions.limit) {
@@ -169,19 +125,20 @@ function loaderForBTM(model, joinTableName, foreignKey, foreignKeyField) {
       findOptions.groupedLimit = {
         through: options.through,
         on: association,
-        limit: limit,
-        values: (0, _lodash.uniq)(keys)
+        limit,
+        values: uniq(keys)
       };
     } else {
 
-      const attributes = options.through && options.through.attributes ? [].concat(_toConsumableArray(options.through.attributes), [foreignKey]) : [foreignKey];
+      const attributes = options.through && options.through.attributes ? [...options.through.attributes, foreignKey] : [foreignKey];
 
       findOptions.include = [{
-        attributes: attributes,
+        attributes,
         association: association.manyFromSource,
-        where: _extends({
-          [foreignKeyField]: keys
-        }, options.through.where)
+        where: {
+          [foreignKeyField]: keys,
+          ...options.through.where
+        }
       }];
     }
 
@@ -191,21 +148,19 @@ function loaderForBTM(model, joinTableName, foreignKey, foreignKeyField) {
   });
 }
 
-function loaderForModel(model, attribute, attributeField) {
-  let options = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : {};
+function loaderForModel(model, attribute, attributeField, options = {}) {
+  assert(options.include === undefined, 'options.include is not supported by model loader');
 
-  (0, _assert2.default)(options.include === undefined, 'options.include is not supported by model loader');
-
-  return new _dataloader2.default(keys => {
+  return new DataLoader(keys => {
     const findOptions = Object.assign({}, options);
     delete findOptions.rejectOnEmpty;
 
     if (findOptions.limit && keys.length > 1) {
       const limit = findOptions.offset && findOptions.offset > 0 ? [findOptions.limit, findOptions.offset] : findOptions.limit;
       findOptions.groupedLimit = {
-        limit: limit,
+        limit,
         on: attributeField,
-        values: (0, _lodash.uniq)(keys)
+        values: uniq(keys)
       };
       delete findOptions.limit;
       delete findOptions.offset;
@@ -224,10 +179,8 @@ function loaderForModel(model, attribute, attributeField) {
 function shimModel(target) {
   if (target.findByPk ? target.findByPk.__wrapped : target.findById.__wrapped) return;
 
-  _shimmer2.default.massWrap(target, (0, _helper.methods)(_sequelize2.default.version).findByPk, original => {
-    return function batchedFindById(id) {
-      let options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
+  shimmer.massWrap(target, methods(Sequelize.version).findByPk, original => {
+    return function batchedFindById(id, options = {}) {
       if (options.transaction || options.include || activeClsTransaction() || !options[EXPECTED_OPTIONS_KEY]) {
         return original.apply(this, arguments);
       }
@@ -256,10 +209,8 @@ function shimModel(target) {
 function shimBelongsTo(target) {
   if (target.get.__wrapped) return;
 
-  _shimmer2.default.wrap(target, 'get', original => {
-    return function batchedGetBelongsTo(instance) {
-      let options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
+  shimmer.wrap(target, 'get', original => {
+    return function batchedGetBelongsTo(instance, options = {}) {
       if (Array.isArray(instance) || options.include || options.transaction || activeClsTransaction() || !options[EXPECTED_OPTIONS_KEY] || options.where) {
         return original.apply(this, arguments);
       }
@@ -289,10 +240,8 @@ function shimBelongsTo(target) {
 function shimHasOne(target) {
   if (target.get.__wrapped) return;
 
-  _shimmer2.default.wrap(target, 'get', original => {
-    return function batchedGetHasOne(instance) {
-      let options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
+  shimmer.wrap(target, 'get', original => {
+    return function batchedGetHasOne(instance, options = {}) {
       if (Array.isArray(instance) || options.include || options.transaction || activeClsTransaction() || !options[EXPECTED_OPTIONS_KEY]) {
         return original.apply(this, arguments);
       }
@@ -319,10 +268,8 @@ function shimHasOne(target) {
 function shimHasMany(target) {
   if (target.get.__wrapped) return;
 
-  _shimmer2.default.wrap(target, 'get', original => {
-    return function batchedGetHasMany(instances) {
-      let options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
+  shimmer.wrap(target, 'get', original => {
+    return function batchedGetHasMany(instances, options = {}) {
       let isCount = false;
       if (options.include || options.transaction || options.separate || activeClsTransaction() || !options[EXPECTED_OPTIONS_KEY]) {
         return original.apply(this, arguments);
@@ -341,21 +288,26 @@ function shimHasMany(target) {
 
       if (this.scope) {
         options.where = {
-          [_sequelize2.default.Op ? _sequelize2.default.Op.and : '$and']: [options.where, this.scope]
+          [Sequelize.Op ? Sequelize.Op.and : '$and']: [
+            options.where,
+            this.scope
+          ]
         };
       }
 
-      let loader,
-          loaderOptions = _extends({
-        multiple: true
-      }, options);
+      let loader
+        , loaderOptions = {
+          multiple: true,
+          ...options
+        };
 
       const cacheKey = getCacheKey(this.target, this.foreignKey, loaderOptions);
       loader = options[EXPECTED_OPTIONS_KEY].loaders.autogenerated.get(cacheKey);
       if (!loader) {
-        loader = loaderForModel(this.target, this.foreignKey, this.foreignKeyField, _extends({}, loaderOptions, {
+        loader = loaderForModel(this.target, this.foreignKey, this.foreignKeyField, {
+          ...loaderOptions,
           cache: true
-        }));
+        });
         options[EXPECTED_OPTIONS_KEY].loaders.autogenerated.set(cacheKey, loader);
       }
 
@@ -392,12 +344,10 @@ function shimHasMany(target) {
 function shimBelongsToMany(target) {
   if (target.get.__wrapped) return;
 
-  _shimmer2.default.wrap(target, 'get', original => {
-    return function batchedGetBelongsToMany(instances) {
-      let options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
+  shimmer.wrap(target, 'get', original => {
+    return function batchedGetBelongsToMany(instances, options = {}) {
       let isCount = false;
-      (0, _assert2.default)(this.paired, '.paired missing on belongsToMany association. You need to set up both sides of the association');
+      assert(this.paired, '.paired missing on belongsToMany association. You need to set up both sides of the association');
 
       if (options.include || options.transaction || activeClsTransaction() || !options[EXPECTED_OPTIONS_KEY]) {
         return original.apply(this, arguments);
@@ -415,29 +365,37 @@ function shimBelongsToMany(target) {
 
       if (this.scope) {
         options.where = {
-          [_sequelize2.default.Op ? _sequelize2.default.Op.and : '$and']: [options.where, this.scope]
+          [Sequelize.Op ? Sequelize.Op.and : '$and']: [
+            options.where,
+            this.scope
+          ]
         };
       }
 
       options.through = options.through || {};
       if (this.through.scope) {
         options.through.where = {
-          [_sequelize2.default.Op ? _sequelize2.default.Op.and : '$and']: [options.through.where, this.through.scope]
+          [Sequelize.Op ? Sequelize.Op.and : '$and']: [
+            options.through.where,
+            this.through.scope
+          ]
         };
       }
 
-      let loader,
-          loaderOptions = _extends({
-        association: this.paired,
-        multiple: true
-      }, options);
+      let loader
+        , loaderOptions = {
+          association: this.paired,
+          multiple: true,
+          ...options
+        };
 
       const cacheKey = getCacheKey(this.target, [this.paired.manyFromSource.as, this.foreignKey], loaderOptions);
       loader = options[EXPECTED_OPTIONS_KEY].loaders.autogenerated.get(cacheKey);
       if (!loader) {
-        loader = loaderForBTM(this.target, this.paired.manyFromSource.as, this.foreignKey, this.identifierField, _extends({}, loaderOptions, {
+        loader = loaderForBTM(this.target, this.paired.manyFromSource.as, this.foreignKey, this.identifierField, {
+          ...loaderOptions,
           cache: true
-        }));
+        });
         options[EXPECTED_OPTIONS_KEY].loaders.autogenerated.set(cacheKey, loader);
       }
 
@@ -456,33 +414,33 @@ function shimBelongsToMany(target) {
 }
 
 function activeClsTransaction() {
-  if (versionTestRegEx.test(_sequelize2.default.version)) {
-    if (_sequelize2.default._cls && _sequelize2.default._cls.get('transaction')) {
+  if (versionTestRegEx.test(Sequelize.version)) {
+    if (Sequelize._cls && Sequelize._cls.get('transaction')) {
       return true;
     }
-  } else if (_sequelize2.default.cls && _sequelize2.default.cls.get('transaction')) {
+  } else if (Sequelize.cls && Sequelize.cls.get('transaction')) {
     return true;
   }
   return false;
 }
 
-const EXPECTED_OPTIONS_KEY = exports.EXPECTED_OPTIONS_KEY = 'dataloader_sequelize_context';
-function createContext(models) {
-  const { sequelizeModule: sequelize, sequelize: sq } = models;
-  let options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
+const EXPECTED_OPTIONS_KEY = 'dataloader_sequelize_context';
+function createContext(models, options = {}) {
+  const { sequelizeModule: sequelize } = models;
   const loaders = {};
-  
+
   shimModel(sequelize.Model);
   shimBelongsTo(sequelize.Association.BelongsTo.prototype);
   shimHasOne(sequelize.Association.HasOne.prototype);
   shimHasMany(sequelize.Association.HasMany.prototype);
   shimBelongsToMany(sequelize.Association.BelongsToMany.prototype);
-  loaders.autogenerated = (0, _lruCache2.default)({ max: options.max || 500 });
-  
+
+  loaders.autogenerated = LRU({max: options.max || 500});
+
   const allValidModels = Object.fromEntries(Object.entries(models).filter(([modelName, model]) => model.findByPk))
 
   for (const Model of Object.values(allValidModels)) {
+    shimModel(Model);
     loaders[Model.name] = {
       bySingleAttribute: {}
     };
@@ -491,7 +449,7 @@ function createContext(models) {
   }
 
   for (const Model of Object.values(allValidModels)) {
-    (0, _lodash.values)(Model.associations).forEach(association => {
+    values(Model.associations).forEach(association => {
       if (association.associationType === 'BelongsTo') {
         const Target = association.target;
         if (association.targetKey !== Target.primaryKeyAttribute) {
@@ -517,32 +475,36 @@ function createContext(models) {
     });
   }
 
-  return { loaders: loaders, prime: prime };
+  return {loaders, prime};
 }
 
 function removeContext(sequelize) {
-  // const Model = versionTestRegEx.test(sequelize.constructor.version) ? // v3 vs v4
-  // sequelize.constructor.Model : sequelize.constructor.Model.prototype;
-  // I added this line:
-  const Model = sequelize.Model;
+  const Model = versionTestRegEx.test(sequelize.constructor.version) ? // v3 vs v4
+    sequelize.constructor.Model : sequelize.constructor.Model.prototype;
 
-  _shimmer2.default.massUnwrap(Model, (0, _helper.methods)(_sequelize2.default.version).findByPk);
-  _shimmer2.default.unwrap(sequelize.Association.BelongsTo.prototype, 'get');
-  _shimmer2.default.unwrap(sequelize.Association.HasOne.prototype, 'get');
-  _shimmer2.default.unwrap(sequelize.Association.HasMany.prototype, 'get');
-  _shimmer2.default.unwrap(sequelize.Association.BelongsToMany.prototype, 'get');
+  shimmer.massUnwrap(Model, methods(Sequelize.version).findByPk);
+  shimmer.unwrap(sequelize.constructor.Association.BelongsTo.prototype, 'get');
+  shimmer.unwrap(sequelize.constructor.Association.HasOne.prototype, 'get');
+  shimmer.unwrap(sequelize.constructor.Association.HasMany.prototype, 'get');
+  shimmer.unwrap(sequelize.constructor.Association.BelongsToMany.prototype, 'get');
 }
 
-function createModelAttributeLoader(Model, attribute) {
-  let options = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
-
-  return new _dataloader2.default(keys => {
-    return Model.findAll(_extends({}, options, {
+function createModelAttributeLoader(Model, attribute, options = {}) {
+  return new DataLoader(keys => {
+    return Model.findAll({
+      ...options,
       where: {
         [attribute]: keys
       }
-    })).then(mapResult.bind(null, attribute, keys, {}));
+    }).then(mapResult.bind(null, attribute, keys, {}));
   }, {
     cache: true
   });
+}
+
+module.exports = {
+  createContext: createContext,
+  removeContext: removeContext,
+  getCacheKey: getCacheKey,
+  EXPECTED_OPTIONS_KEY: EXPECTED_OPTIONS_KEY,
 }
