@@ -2,7 +2,7 @@
   "name": "dataloader-sequelize",
   "version": "2.3.3",
   "description": "Batching and simplification of Sequelize with facebook/dataloader",
-  "main": "lib/index.js",
+  "main": "src/index.js",
   "license": "MIT",
   "scripts": {
     "prepublish": "npm run build",

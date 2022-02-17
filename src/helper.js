@@ -6,9 +6,7 @@ export const SEQUELIZE = 'SEQUELIZE';
 
 export function methods(version) {
   return {
-    findByPk: /^[56]/.test(version) ? ['findByPk'] :
-              /^[4]/.test(version) ? ['findByPk', 'findById'] :
-              ['findById', 'findByPrimary']
+    findByPk: ['findByPk']
   };
 }
 
